@@ -67,21 +67,21 @@ def load_all():
 crime, unfit, unfit_clean, vacant, cv, decay = load_all()
 
 # ── Header ─────────────────────────────────────────────────────────────────────
-st.markdown("# 🏙️ CityUnmasked — Syracuse Crime & Urban Decay Analysis")
-st.markdown("**Track 3 — Urban Data Analysis | City of Syracuse Datathon 2026**")
+st.markdown("#  CityUnmasked — Syracuse Crime & Urban Decay Analysis")
+# st.markdown("**Track 3 — Urban Data Analysis | City of Syracuse Datathon 2026**")
 st.divider()
 
 # ── KPI row ────────────────────────────────────────────────────────────────────
-cols = st.columns(8)
+cols = st.columns(4)
 kpi_data = [
     ("Total Crimes",           f"{len(crime):,}",                                              "#f97316"),
     ("Crime Types",            str(crime['CRIME_TYPE'].nunique()),                             "#f97316"),
     ("Unfit Properties",       str(len(unfit)),                                                "#f97316"),
-    ("Open Violations",        str(int((unfit['status_type_name']=='Open').sum())),            "#ef4444"),
-    ("Near Unfit (100m)",      f"{crime['near_unfit'].mean()*100:.0f}%",                      "#f97316"),
+    # ("Open Violations",        str(int((unfit['status_type_name']=='Open').sum())),            "#ef4444"),
+    # ("Near Unfit (100m)",      f"{crime['near_unfit'].mean()*100:.0f}%",                      "#f97316"),
     ("Vacant Properties",      f"{len(vacant):,}",                                             "#3b82f6"),
-    ("Active Vacancies",       str(int(vacant['is_active'].sum())),                            "#3b82f6"),
-    ("Near Any Decay (100m)",  f"{crime['near_decay'].mean()*100:.0f}%",                      "#dc2626"),
+    # ("Active Vacancies",       str(int(vacant['is_active'].sum())),                            "#3b82f6"),
+    # ("Near Any Decay (100m)",  f"{crime['near_decay'].mean()*100:.0f}%",                      "#dc2626"),
 ]
 for col, (label, val, color) in zip(cols, kpi_data):
     with col:

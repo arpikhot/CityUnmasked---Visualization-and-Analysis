@@ -30,4 +30,4 @@ def render(unfit):
         st.plotly_chart(fig_open_by_zip(unfit), use_container_width=True)
         st.caption("📌 Active unresolved violations right now — where enforcement is most urgently needed.")
 
-    st.warning("⚠️ **Trend Alert:** Unfit violations grew **33x from 2014 to 2025**, with 73% still unresolved. Steepest acceleration began in 2022.")
+    # st.warning("⚠️ **Trend Alert:** Unfit violations grew **33x from 2014 to 2025**, with 73% still unresolved. Steepest acceleration began in 2022.")

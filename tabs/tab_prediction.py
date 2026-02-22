@@ -71,37 +71,37 @@ def render(unfit, crime):
     st.divider()
 
     # ── Interpretation ──
-    st.markdown("### 🔍 What the Model is Doing")
+    # st.markdown("### 🔍 What the Model is Doing")
 
-    with st.expander("See the modelling logic in plain English"):
-        st.markdown(
-            """
-            **1. Space:**  
-            We snap every incident to a coarse latitude/longitude grid (~400–500m).  
-            Each grid cell becomes a small “block” of the city.
+    # with st.expander("See the modelling logic in plain English"):
+    #     st.markdown(
+    #         """
+    #         **1. Space:**  
+    #         We snap every incident to a coarse latitude/longitude grid (~400–500m).  
+    #         Each grid cell becomes a small “block” of the city.
 
-            **2. Time:**  
-            For each year (2023, 2024, 2025), we split the data into:
-            - **History:** January–September  
-            - **Future:** October–December  
+    #         **2. Time:**  
+    #         For each year (2023, 2024, 2025), we split the data into:
+    #         - **History:** January–September  
+    #         - **Future:** October–December  
 
-            **3. Features (X):** per grid cell in Jan–Sep  
-            - Total crime count  
-            - Share of serious crimes (assault, robbery, burglary, etc.)  
+    #         **3. Features (X):** per grid cell in Jan–Sep  
+    #         - Total crime count  
+    #         - Share of serious crimes (assault, robbery, burglary, etc.)  
 
-            **4. Label (y):** per grid cell in Oct–Dec  
-            - 1 = “cluster” if future crimes ≥ threshold  
-            - 0 = otherwise  
+    #         **4. Label (y):** per grid cell in Oct–Dec  
+    #         - 1 = “cluster” if future crimes ≥ threshold  
+    #         - 0 = otherwise  
 
-            **5. Model:**  
-            Logistic Regression (class-balanced) learns the relationship between
-            historical intensity/seriousness and whether that cell turns into a Q4 cluster.
+    #         **5. Model:**  
+    #         Logistic Regression (class-balanced) learns the relationship between
+    #         historical intensity/seriousness and whether that cell turns into a Q4 cluster.
 
-            **6. Multi-year aggregation:**  
-            We repeat this for 2023, 2024, 2025 and average the predicted risk per grid.
-            Cells that are high-risk in multiple years emerge as **chronic hotspots**.
-            """
-        )
+    #         **6. Multi-year aggregation:**  
+    #         We repeat this for 2023, 2024, 2025 and average the predicted risk per grid.
+    #         Cells that are high-risk in multiple years emerge as **chronic hotspots**.
+    #         """
+    #     )
 
     st.markdown("### 🧠 Key Takeaways")
 
@@ -113,8 +113,6 @@ def render(unfit, crime):
           - **Eastside / SU (13210)**  
           - **Near Westside (13204)**  
 
-        - **Chronic vs one-off:** by averaging risk across three years, we highlight
-          **structurally risky blocks**, not just single-year spikes.
 
         - **Severity matters:** grids with a high share of serious crimes in Jan–Sep
           are much more likely to become Q4 hotspots.
@@ -124,7 +122,7 @@ def render(unfit, crime):
     st.divider()
 
     # ── Policy framing – tuned to these results ──
-    st.markdown("### 🎯 Policy Recommendations Based on the Hotspot Model")
+    st.markdown("### 🎯 Possible Improvements in the Hotspot Zones")
 
     st.markdown(
         """
@@ -137,9 +135,6 @@ def render(unfit, crime):
           **code enforcement on chronically problematic parcels**.  
         - Partner with anchor institutions (SU, hospitals, major employers) to co-fund interventions.  
 
-        **City-wide priorities informed by the model:**  
-        - Build a **hotspot list** of 10–20 grids that recur as high-risk and track quarterly metrics.  
-        - Tie **code enforcement, vacant property follow-up, and police patrol planning** to these grids.  
-        - Use year-over-year changes in risk scores as a way to monitor whether interventions are working.
+ 
         """
     )

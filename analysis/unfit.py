@@ -88,3 +88,4 @@ def fig_prediction(unfit):
                       xaxis_title="Year", yaxis_title="Violations",
                       height=420)
     return fig, future['Year'].tolist(), [int(p) for p in preds]
+

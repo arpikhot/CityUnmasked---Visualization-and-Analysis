@@ -181,4 +181,6 @@ def fig_violations_by_neighborhood(cv):
                  color='Count', color_continuous_scale='Reds')
     fig.update_layout(yaxis={'categoryorder': 'total ascending'},
                       height=320, coloraxis_showscale=False)
-    return fig
+    return fig 
+
+

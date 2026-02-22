@@ -59,3 +59,4 @@ def fig_vacant_active_by_zip(vacant):
                  color='Active Count', color_continuous_scale='Reds')
     fig.update_layout(height=320, coloraxis_showscale=False)
     return fig
+

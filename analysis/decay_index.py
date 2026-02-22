@@ -274,3 +274,4 @@ def fig_economic_abandonment(abandoned):
                  title="Economically Abandoned Vacancies — Low Crime Zips")
     fig.update_layout(height=340, coloraxis_showscale=False)
     return fig
+

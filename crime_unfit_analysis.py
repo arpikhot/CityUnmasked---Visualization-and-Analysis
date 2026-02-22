@@ -69,11 +69,14 @@ def load_data():
     # ── Urban Decay Index ──
     decay = _build_decay_index(unfit_clean, vacant)
 
-    # ── Assign zip codes to crimes via nearest decay centroid ──
+    # ── Code Violations ──
+    cv = load_code_violations()
+
+    # ── Add violation features to crimes ──
     crime_2024 = assign_crime_zip(crime_2024, decay)
+    crime_2024 = add_violation_features_to_crimes(crime_2024, cv)
 
-    return crime, crime_2024, unfit, unfit_clean, vacant, decay
-
+    return crime, crime_2024, unfit, unfit_clean, vacant, decay, cv
 
 def _build_decay_index(unfit_clean, vacant):
     unfit_df = pd.DataFrame({
@@ -438,6 +441,185 @@ def run_granger_causality(crime, unfit):
 
     return results_df, ts, interpretation
 
+def run_granger_causality_cv(crime, cv):
+    """
+    Granger causality using code violations monthly series (108 months).
+    Far more statistically powerful than the 24-month unfit series.
+    Tests both directions: violations → crime AND crime → violations.
+    """
+    # ── Monthly crime counts ──
+    crime = crime.copy()
+    crime['period'] = pd.to_datetime(
+        crime['YEAR'].astype(str) + '-' + crime['MONTH'].astype(str).str.zfill(2)
+    )
+    monthly_crime = crime.groupby('period').size().reset_index()
+    monthly_crime.columns = ['period', 'crime_count']
+
+    # ── Monthly violation counts ──
+    monthly_cv = cv.groupby('period').size().reset_index()
+    monthly_cv.columns = ['period', 'violation_count']
+
+    # ── Merge ──
+    ts = pd.merge(monthly_crime, monthly_cv, on='period', how='inner').sort_values('period')
+    ts = ts.dropna()
+
+    if len(ts) < 24:
+        return None, None, ts, "Insufficient overlapping time periods."
+
+    # ── Stationarity check ──
+    adf_crime = adfuller(ts['crime_count'], autolag='AIC')
+    adf_cv    = adfuller(ts['violation_count'], autolag='AIC')
+
+    ts_diff = ts.copy()
+    if adf_crime[1] > 0.05:
+        ts_diff['crime_count']     = ts_diff['crime_count'].diff()
+    if adf_cv[1] > 0.05:
+        ts_diff['violation_count'] = ts_diff['violation_count'].diff()
+    ts_diff = ts_diff.dropna()
+
+    max_lag = min(6, len(ts_diff) // 5)
+
+    # ── Direction 1: violations → crime ──
+    try:
+        gc1 = grangercausalitytests(
+            ts_diff[['crime_count', 'violation_count']].values,
+            maxlag=max_lag, verbose=False
+        )
+        lags1 = []
+        for lag in range(1, max_lag + 1):
+            p = gc1[lag][0]['ssr_ftest'][1]
+            lags1.append({
+                'lag_months': lag,
+                'p_value':    round(p, 4),
+                'significant': p < 0.05,
+                'direction':  'Violations → Crime'
+            })
+    except Exception as e:
+        lags1 = []
+
+    # ── Direction 2: crime → violations ──
+    try:
+        gc2 = grangercausalitytests(
+            ts_diff[['violation_count', 'crime_count']].values,
+            maxlag=max_lag, verbose=False
+        )
+        lags2 = []
+        for lag in range(1, max_lag + 1):
+            p = gc2[lag][0]['ssr_ftest'][1]
+            lags2.append({
+                'lag_months': lag,
+                'p_value':    round(p, 4),
+                'significant': p < 0.05,
+                'direction':  'Crime → Violations'
+            })
+    except Exception as e:
+        lags2 = []
+
+    results_df = pd.DataFrame(lags1 + lags2)
+
+    # ── Interpretation ──
+    sig1 = [r['lag_months'] for r in lags1 if r['significant']]
+    sig2 = [r['lag_months'] for r in lags2 if r['significant']]
+
+    if sig1 and sig2:
+        interpretation = (
+            f"🔄 Bidirectional relationship detected. Violations predict crime at "
+            f"lag(s) {sig1} months AND crime predicts violations at lag(s) {sig2} months. "
+            f"This is consistent with a reinforcing feedback loop — each accelerates the other."
+        )
+    elif sig1:
+        interpretation = (
+            f"✅ Violations → Crime causality detected at lag(s) {sig1} month(s). "
+            f"Physical decay statistically precedes crime increases. "
+            f"Crime → Violations direction was NOT significant — decay is the leading signal."
+        )
+    elif sig2:
+        interpretation = (
+            f"⚠️ Crime → Violations causality detected at lag(s) {sig2} month(s). "
+            f"Crime increases appear to precede violation increases — possibly through "
+            f"resident flight and accelerated property abandonment. "
+            f"Violations → Crime direction was NOT significant."
+        )
+    else:
+        interpretation = (
+            "⚠️ No statistically significant Granger causality detected in either direction. "
+            "The relationship may be contemporaneous rather than lagged, or driven by a "
+            "shared third factor (poverty, disinvestment) rather than direct causation."
+        )
+
+    return results_df, (sig1, sig2), ts, interpretation
+
+
+def fig_granger_cv_pvalues(results_df):
+    """P-value chart for both directions of Granger test."""
+    if results_df is None or len(results_df) == 0:
+        return None
+
+    color_map = {
+        ('Violations → Crime', True):  '#22c55e',
+        ('Violations → Crime', False): '#f97316',
+        ('Crime → Violations', True):  '#22c55e',
+        ('Crime → Violations', False): '#3b82f6',
+    }
+
+    fig = go.Figure()
+    for direction in ['Violations → Crime', 'Crime → Violations']:
+        subset = results_df[results_df['direction'] == direction]
+        if subset.empty:
+            continue
+        colors = [
+            color_map.get((direction, sig), '#6b7280')
+            for sig in subset['significant']
+        ]
+        fig.add_trace(go.Bar(
+            name=direction,
+            x=[f"Lag {l}m" for l in subset['lag_months']],
+            y=subset['p_value'],
+            marker_color=colors,
+            text=[f"p={p}" for p in subset['p_value']],
+            textposition='outside',
+            offsetgroup=direction
+        ))
+
+    fig.add_hline(y=0.05, line_dash='dash', line_color='red',
+                  annotation_text='p=0.05 significance threshold',
+                  annotation_position='top right')
+    fig.update_layout(
+        title="Granger Causality — Both Directions (Code Violations ↔ Crime)",
+        xaxis_title="Lag (months)",
+        yaxis_title="p-value (below 0.05 = significant)",
+        barmode='group',
+        height=420
+    )
+    return fig
+
+
+def fig_granger_cv_timeseries(ts):
+    """Dual-axis monthly time series: crime vs code violations."""
+    if ts is None or len(ts) < 2:
+        return None
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=ts['period'], y=ts['crime_count'],
+        name='Monthly Crime Count',
+        line=dict(color='#f97316', width=2), yaxis='y1'
+    ))
+    fig.add_trace(go.Scatter(
+        x=ts['period'], y=ts['violation_count'],
+        name='Monthly Code Violations',
+        line=dict(color='#dc2626', width=2, dash='dot'), yaxis='y2'
+    ))
+    fig.update_layout(
+        title="Monthly Crime vs Code Violations (2017–2026)",
+        xaxis_title="Month",
+        yaxis=dict(title=dict(text='Crime Count',
+                              font=dict(color='#f97316'))),
+        yaxis2=dict(title=dict(text='Code Violations',
+                               font=dict(color='#dc2626')),
+                    overlaying='y', side='right'),
+        height=400
+    )
+    return fig
 
 def fig_granger_pvalues(results_df):
     if results_df is None:
@@ -493,6 +675,13 @@ def fig_granger_timeseries(ts):
 # RANDOM FOREST
 # ══════════════════════════════════════════════════════════════════════════════
 def run_random_forest(crime_2024):
+    """
+    Random Forest predicting high-severity crime.
+    Now includes code violation density features:
+      - violation_count: total physical decay violations within 100m
+      - violation_severity_score: sum of tier weights within 100m
+      - has_critical_violation: any Tier 1 structural violation nearby
+    """
     df = crime_2024.copy()
     df['high_severity'] = (df['SEVERITY'] >= 3).astype(int)
     df = df[df['TIME_OF_DAY'] != 'Unknown']
@@ -501,9 +690,18 @@ def run_random_forest(crime_2024):
     tod_dummies    = pd.get_dummies(df['TIME_OF_DAY'], prefix='tod')
     day_dummies    = pd.get_dummies(df['DAY_OF_WEEK'], prefix='day')
 
+    # ── Base features ──
+    base_cols = ['HOUR', 'MONTH', 'IS_WEEKEND',
+                 'near_unfit', 'near_vacant', 'near_decay']
+
+    # ── Add violation features if available ──
+    for col in ['violation_count', 'violation_severity_score',
+                'has_critical_violation']:
+        if col in df.columns:
+            base_cols.append(col)
+
     feature_df = pd.concat([
-        df[['HOUR', 'MONTH', 'IS_WEEKEND',
-            'near_unfit', 'near_vacant', 'near_decay']].reset_index(drop=True),
+        df[base_cols].reset_index(drop=True),
         season_dummies.reset_index(drop=True),
         tod_dummies.reset_index(drop=True),
         day_dummies.reset_index(drop=True)
@@ -511,6 +709,9 @@ def run_random_forest(crime_2024):
 
     for col in feature_df.select_dtypes(include='bool').columns:
         feature_df[col] = feature_df[col].astype(int)
+
+    # Fill any NaN in violation columns with 0
+    feature_df = feature_df.fillna(0)
 
     X = feature_df
     y = df['high_severity'].reset_index(drop=True)
@@ -803,3 +1004,200 @@ def fig_economic_abandonment(economic_abandoned):
                  title="Economically Abandoned Vacancies — Low Crime Zip Codes")
     fig.update_layout(height=340, coloraxis_showscale=False)
     return fig
+
+    # ══════════════════════════════════════════════════════════════════════════════
+# CODE VIOLATIONS — LOAD, FILTER, TIER
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Complaint types to keep — physical decay only
+KEEP_COMPLAINT_TYPES = {
+    'Property Maintenance-Int',
+    'Property Maintenance-Ext',
+    'Vacant House',
+    'Overgrowth: Private, Occ',
+    'Trash/Debris-Private, Occ',
+    'Fire Safety',
+    'Vacant Lot',
+}
+
+# Violation keyword → severity tier
+# Tier 1 = Structural/Critical (weight 3)
+# Tier 2 = Systems Failure/Physical Decay (weight 2)
+# Tier 3 = Environmental Neglect/Broken Windows (weight 1)
+TIER_1_KEYWORDS = [
+    '107.1.3', 'unfit for human', 'structural members',
+    '304.10', 'stairways', '305.4', 'stairs and walking',
+    '304.2', 'protective treatment', '27-32 (b)', 'stairs, porches'
+]
+TIER_2_KEYWORDS = [
+    '305.3', 'interior surfaces', '504.1', 'plumbing',
+    '304.13', 'window', 'skylight', '605.1', 'installation',
+    '603.1', 'mechanical', 'appliances', '309.1', 'infestation',
+    '705.1', 'carbon monoxide', '304.15', 'doors', '305.6',
+    'interior doors', 'lead abatement', '27-57', 'receptacle',
+    '27-32 (d)', 'protective coating', '27-31', 'structural'
+]
+TIER_3_KEYWORDS = [
+    '27-72', 'overgrowth', 'trash', 'debris',
+    '308.1', 'rubbish', 'garbage', '27-116', 'vacant property registry'
+]
+
+# Administrative violations to exclude even within kept complaint types
+EXCLUDE_VIOLATION_KEYWORDS = [
+    '27-133 registration', '27-43', 'certification',
+    '105.2', 'building permit'
+]
+
+
+def _assign_violation_tier(violation_text):
+    """Assign severity tier to a violation based on keywords."""
+    if pd.isna(violation_text):
+        return 1
+    v = violation_text.lower()
+
+    # Exclude administrative first
+    for kw in EXCLUDE_VIOLATION_KEYWORDS:
+        if kw in v:
+            return 0  # 0 = exclude
+
+    for kw in TIER_1_KEYWORDS:
+        if kw.lower() in v:
+            return 3
+
+    for kw in TIER_2_KEYWORDS:
+        if kw.lower() in v:
+            return 2
+
+    for kw in TIER_3_KEYWORDS:
+        if kw.lower() in v:
+            return 1
+
+    return 1  # default: treat unknown as tier 1
+
+
+def load_code_violations():
+    """
+    Loads code_violations.csv, filters to physical decay violations only,
+    assigns severity tiers, and returns a clean DataFrame ready for
+    spatial join and time series analysis.
+    """
+    df = pd.read_csv("code_violations.csv")
+
+    # ── Parse dates ──
+    df['violation_date'] = pd.to_datetime(
+        df['violation_date'], format='mixed', utc=True
+    )
+    df['open_date'] = pd.to_datetime(
+        df['open_date'], format='mixed', utc=True
+    )
+    df['year']  = df['violation_date'].dt.year
+    df['month'] = df['violation_date'].dt.month
+    df['period'] = df['violation_date'].dt.to_period('M').dt.to_timestamp()
+
+    # ── Filter to physical decay complaint types ──
+    before = len(df)
+    df = df[df['complaint_type_name'].isin(KEEP_COMPLAINT_TYPES)].copy()
+    after_type_filter = len(df)
+
+    # ── Assign severity tier ──
+    df['tier'] = df['violation'].apply(_assign_violation_tier)
+
+    # ── Drop administrative violations (tier = 0) ──
+    df = df[df['tier'] > 0].copy()
+    after_tier_filter = len(df)
+
+    # ── Drop rows with missing coordinates ──
+    df = df.dropna(subset=['Latitude', 'Longitude'])
+    after_coord_filter = len(df)
+
+    # ── Standardize columns ──
+    df = df.rename(columns={
+        'complaint_address': 'address',
+        'complaint_zip':     'zip_code',
+        'Neighborhood':      'neighborhood',
+        'Latitude':          'lat',
+        'Longitude':         'lon'
+    })
+    df['zip_code']  = df['zip_code'].astype(str).str.strip()
+    df['is_open']   = df['status_type_name'] == 'Open'
+    df['is_vacant'] = df['Vacant'].notna() & (df['Vacant'] != '')
+
+    # ── Tier label ──
+    df['tier_label'] = df['tier'].map({
+        3: 'Structural / Critical',
+        2: 'Systems Failure',
+        1: 'Environmental Neglect'
+    })
+
+    # ── Print summary ──
+    print(f"\n=== CODE VIOLATIONS LOADED ===")
+    print(f"Raw records:              {before:,}")
+    print(f"After complaint filter:   {after_type_filter:,}")
+    print(f"After tier filter:        {after_tier_filter:,}")
+    print(f"After coord filter:       {after_coord_filter:,}")
+    print(f"Date range:               {df['violation_date'].min().date()} → {df['violation_date'].max().date()}")
+    print(f"Years covered:            {df['year'].nunique()} years ({df['year'].min()}–{df['year'].max()})")
+    print(f"Open violations:          {df['is_open'].sum():,} ({df['is_open'].mean()*100:.1f}%)")
+    print(f"\nTier breakdown:")
+    print(df['tier_label'].value_counts().to_string())
+    print(f"\nTop neighborhoods:")
+    print(df['neighborhood'].value_counts().head(8).to_string())
+    print(f"\nTop zip codes:")
+    print(df['zip_code'].value_counts().head(8).to_string())
+
+    return df
+
+
+def get_violation_time_series(cv):
+    """
+    Aggregates code violations to monthly counts by tier.
+    Used for Granger causality and cross-correlation analysis.
+    """
+    monthly = (
+        cv.groupby(['period', 'tier_label'])
+        .size()
+        .unstack(fill_value=0)
+        .reset_index()
+    )
+    monthly['total'] = monthly.drop('period', axis=1).sum(axis=1)
+    return monthly.sort_values('period')
+
+
+def add_violation_features_to_crimes(crime_df, cv):
+    """
+    For each crime, computes within 100m:
+      - violation_count:          total physical decay violations
+      - violation_severity_score: sum of tier weights (tier 1=1, 2=2, 3=3)
+      - has_critical_violation:   any Tier 1 (structural) violation nearby
+    Uses BallTree haversine for efficiency.
+    """
+    if len(cv) == 0:
+        crime_df['violation_count']          = 0
+        crime_df['violation_severity_score'] = 0
+        crime_df['has_critical_violation']   = False
+        return crime_df
+
+    c_coords  = np.radians(crime_df[['LAT', 'LON']].values)
+    cv_coords = np.radians(cv[['lat', 'lon']].values)
+
+    tree = BallTree(cv_coords, metric='haversine')
+
+    # Count all violations within 100m
+    counts = tree.query_radius(c_coords, r=100/6_371_000, count_only=True)
+    crime_df = crime_df.copy()
+    crime_df['violation_count'] = counts
+
+    # Severity score — query indices within 100m and sum tier weights
+    indices = tree.query_radius(c_coords, r=100/6_371_000, count_only=False)
+    tiers   = cv['tier'].values
+
+    crime_df['violation_severity_score'] = [
+        tiers[idx].sum() if len(idx) > 0 else 0
+        for idx in indices
+    ]
+    crime_df['has_critical_violation'] = [
+        bool((tiers[idx] == 3).any()) if len(idx) > 0 else False
+        for idx in indices
+    ]
+
+    return crime_df

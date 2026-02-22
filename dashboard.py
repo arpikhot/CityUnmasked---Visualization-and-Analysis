@@ -1,5 +1,7 @@
 import streamlit as st
 from streamlit_folium import st_folium
+import plotly.express as px
+import plotly.graph_objects as go
 from crime_unfit_analysis import (
     load_data, get_kpis,
     fig_top_crimes, fig_qol_pie, fig_crime_by_month,
@@ -11,6 +13,8 @@ from crime_unfit_analysis import (
     fig_decay_by_zip, fig_decay_zone_crimes,
     fig_crime_type_by_decay_zone, get_proximity_stats,
     run_granger_causality, fig_granger_pvalues, fig_granger_timeseries,
+    run_granger_causality_cv, fig_granger_cv_pvalues, fig_granger_cv_timeseries,
+    get_violation_time_series,
     run_random_forest, fig_rf_feature_importance,
     fig_rf_confusion_matrix, fig_rf_metrics,
     classify_neighborhoods, get_economic_abandonment_zones,
@@ -54,7 +58,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Load Data ──────────────────────────────────────────────────────────────────
-crime, crime_2024, unfit, unfit_clean, vacant, decay = load_data()
+crime, crime_2024, unfit, unfit_clean, vacant, decay, cv = load_data()
 
 # ── Cached heavy computations ──────────────────────────────────────────────────
 @st.cache_data
@@ -68,6 +72,10 @@ def get_abandonment(_crime_2024, _decay):
 @st.cache_data
 def get_granger(_crime, _unfit):
     return run_granger_causality(_crime, _unfit)
+
+@st.cache_data
+def get_granger_cv(_crime, _cv):
+    return run_granger_causality_cv(_crime, _cv)
 
 @st.cache_data
 def get_rf(_crime_2024):
@@ -102,11 +110,12 @@ for col, (label, val, color) in zip(cols, kpi_data):
 st.divider()
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📊 Crime Analysis",
     "🏚️ Unfit Properties",
     "🏘️ Vacant Properties",
     "📉 Urban Decay Index",
+    "⚠️ Code Violations",
     "🗺️ Map",
     "🔮 Prediction"
 ])
@@ -326,8 +335,155 @@ with tab4:
 
     st.error("🔴 **Key Finding:** Type A zip codes (13204, 13205, 13208) lead on both decay score AND crime — these need simultaneous housing AND public safety intervention. Type B zones need investment, not policing.")
 
-# ── Tab 5 — Map ────────────────────────────────────────────────────────────────
+# ── Tab 5 — Code Violations ────────────────────────────────────────────────────
 with tab5:
+    st.caption("92,790 physical decay violations across Syracuse (2017–2026), filtered to structural, systems failure, and environmental neglect violations only. Administrative violations excluded.")
+
+    with st.expander("ℹ️ What are the three violation tiers?"):
+        st.markdown("""
+        **Tier 1 — Structural / Critical** 🔴
+        Direct threats to a building's physical integrity: unfit for human occupancy citations,
+        structural member failures, stairway collapse risk, protective treatment failures.
+        These are the violations most directly linked to property abandonment.
+
+        **Tier 2 — Systems Failure** 🟠
+        Building systems that are failing: interior surface deterioration, plumbing failures,
+        broken windows and doors, electrical hazards, mechanical appliance failures,
+        pest infestation, carbon monoxide risks, lead paint hazards.
+
+        **Tier 3 — Environmental Neglect** 🟡
+        Visible signs of abandonment and neglect: overgrowth, trash and debris accumulation,
+        garbage pileup, vacant property registry violations. These are the broken windows
+        theory indicators — visible disorder that signals an area is unmonitored.
+
+        **Why only these?** Administrative violations (registration failures, permit paperwork,
+        business certifications) were excluded because they do not reflect physical decay.
+        Only violations that indicate a building or property is physically deteriorating were kept.
+        """)
+
+    # ── KPIs ──
+    vts = get_violation_time_series(cv)
+    cv_k1, cv_k2, cv_k3, cv_k4 = st.columns(4)
+    cv_kpi_data = [
+        ("Total Physical Violations", f"{len(cv):,}",                                          "#dc2626"),
+        ("Still Open",                f"{cv['is_open'].sum():,} ({cv['is_open'].mean()*100:.0f}%)", "#f97316"),
+        ("Structural / Critical",     f"{(cv['tier']==3).sum():,}",                             "#dc2626"),
+        ("Years of Data",             f"{cv['year'].min()}–{cv['year'].max()}",                 "#6b7280"),
+    ]
+    for col, (label, val, color) in zip([cv_k1, cv_k2, cv_k3, cv_k4], cv_kpi_data):
+        with col:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-value" style="color:{color}">{val}</div>
+                <div class="metric-label">{label}</div>
+            </div>""", unsafe_allow_html=True)
+
+    st.markdown("###")
+
+    # ── Tier breakdown by year ──
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown('<div class="section-header-red">Violations by Year and Tier</div>',
+                    unsafe_allow_html=True)
+        yearly_tier = cv.groupby(['year', 'tier_label']).size().reset_index()
+        yearly_tier.columns = ['Year', 'Tier', 'Count']
+        color_map_tier = {
+            'Structural / Critical': '#dc2626',
+            'Systems Failure':       '#f97316',
+            'Environmental Neglect': '#f59e0b'
+        }
+        fig_vt = px.bar(yearly_tier, x='Year', y='Count', color='Tier',
+                        color_discrete_map=color_map_tier, barmode='stack')
+        fig_vt.update_layout(height=380)
+        st.plotly_chart(fig_vt, use_container_width=True)
+        st.caption("📌 Annual violation counts split by severity tier. Growing bars mean physical decay is accelerating. Red tier (structural) growing fastest is the most alarming signal.")
+
+    with col2:
+        st.markdown('<div class="section-header-red">Tier Distribution</div>',
+                    unsafe_allow_html=True)
+        tier_counts = cv['tier_label'].value_counts()
+        fig_tp = px.pie(values=tier_counts.values, names=tier_counts.index,
+                        color=tier_counts.index,
+                        color_discrete_map=color_map_tier, hole=0.45)
+        fig_tp.update_layout(height=380)
+        st.plotly_chart(fig_tp, use_container_width=True)
+        st.caption("📌 Share of violations by tier. A large Environmental Neglect slice means visible disorder dominates — consistent with broken windows theory. A growing Structural slice means buildings are failing.")
+
+    col3, col4 = st.columns(2)
+    with col3:
+        st.markdown('<div class="section-header-red">Top Zip Codes by Violation Count</div>',
+                    unsafe_allow_html=True)
+        cv_zip = cv['zip_code'].value_counts().head(8).reset_index()
+        cv_zip.columns = ['Zip Code', 'Count']
+        fig_cz = px.bar(cv_zip, x='Zip Code', y='Count',
+                        color='Count', color_continuous_scale='Reds')
+        fig_cz.update_layout(height=320, coloraxis_showscale=False)
+        st.plotly_chart(fig_cz, use_container_width=True)
+        st.caption("📌 Zip codes with the most physical decay violations. Consistent with crime and unfit/vacant hotspots — 13205, 13204, 13208 dominate all four datasets.")
+
+    with col4:
+        st.markdown('<div class="section-header-red">Top Neighborhoods by Violation Count</div>',
+                    unsafe_allow_html=True)
+        cv_nbr = cv['neighborhood'].value_counts().head(8).reset_index()
+        cv_nbr.columns = ['Neighborhood', 'Count']
+        fig_cn = px.bar(cv_nbr, x='Count', y='Neighborhood', orientation='h',
+                        color='Count', color_continuous_scale='Reds')
+        fig_cn.update_layout(yaxis={'categoryorder': 'total ascending'},
+                              height=320, coloraxis_showscale=False)
+        st.plotly_chart(fig_cn, use_container_width=True)
+        st.caption("📌 Northside, Brighton, and Near Westside lead — the same neighborhoods that dominate the crime heatmap and vacant property analysis. Four independent datasets pointing at the same geography.")
+
+    # ── Granger Causality with CV ──
+    st.divider()
+    st.markdown("### 📈 Granger Causality — Code Violations ↔ Crime (108 Months)")
+    st.caption(
+        "This is the upgraded Granger test using 92,790 code violations across 108 months (2017–2026) "
+        "instead of the 264 unfit violations across 24 months. Tested in BOTH directions. "
+        "108 monthly data points gives this test genuine statistical power."
+    )
+
+    with st.expander("ℹ️ What does bidirectional Granger testing tell us?"):
+        st.markdown("""
+        **Violations → Crime:** If past months of high violation counts predict future crime increases,
+        physical decay is the leading signal. This supports targeted property intervention as crime prevention.
+
+        **Crime → Violations:** If past months of high crime predict future violation increases,
+        crime may be driving abandonment and neglect — residents leave, landlords stop maintaining,
+        buildings deteriorate. This is the reverse causation the project thesis acknowledges honestly.
+
+        **Both significant:** A feedback loop — each accelerates the other. The most dangerous
+        condition, and the justification for simultaneous intervention in Type A zones.
+
+        **Neither significant:** The relationship may be contemporaneous (same month, not lagged)
+        or driven by a shared underlying cause like poverty or disinvestment.
+        """)
+
+    gc_cv_results, gc_cv_sig, gc_cv_ts, gc_cv_interpretation = get_granger_cv(crime, cv)
+    st.info(f"**Result:** {gc_cv_interpretation}")
+
+    if gc_cv_results is not None:
+        gc1, gc2 = st.columns(2)
+        with gc1:
+            fig_gcv = fig_granger_cv_pvalues(gc_cv_results)
+            if fig_gcv:
+                st.plotly_chart(fig_gcv, use_container_width=True)
+                st.caption("📌 Bars below the red line = statistically significant. Orange bars = violations predict crime. Blue bars = crime predicts violations. Green = significant in that direction.")
+        with gc2:
+            fig_gcv_ts = fig_granger_cv_timeseries(gc_cv_ts)
+            if fig_gcv_ts:
+                st.plotly_chart(fig_gcv_ts, use_container_width=True)
+                st.caption("📌 Monthly crime (orange) vs code violations (red dotted) over 9 years. If violation spikes visually precede crime spikes, it supports the causal direction.")
+
+        with st.expander("📊 Full Granger Results Table — Both Directions"):
+            st.dataframe(gc_cv_results, use_container_width=True)
+
+    st.error(
+        "🔴 **Key upgrade from unfit-only Granger test:** 108 months of data vs 24 months. "
+        "Results here are statistically reliable. The direction of causality shown above "
+        "is the most honest answer the data can give about whether decay precedes crime."
+    )
+# ── Tab 6 — Map ────────────────────────────────────────────────────────────────
+with tab6:
     st.caption("All three datasets plotted on a single interactive map. Use the layer control in the top-right corner to show or hide each layer.")
 
     with st.expander("ℹ️ How to read this map"):
@@ -343,8 +499,8 @@ with tab5:
     st_folium(build_map(crime_2024, unfit_clean, vacant), width=1100, height=580)
     st.success("🗺️ Areas where red unfit markers and blue vacant density overlap with high crime heatmap intensity are Syracuse's highest-priority intervention zones — concentrated in the northwest and southwest corridors.")
 
-# ── Tab 6 — Prediction ─────────────────────────────────────────────────────────
-with tab6:
+# ── Tab 7 — Prediction ─────────────────────────────────────────────────────────
+with tab7:
     st.caption("Two prediction approaches: a linear forecast of future unfit violations, and a Random Forest model that predicts high-severity crime risk from decay and temporal features.")
 
     st.markdown("### 📉 Unfit Violation Forecast (Linear Trend)")

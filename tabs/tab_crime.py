@@ -30,4 +30,4 @@ def render(crime):
         st.plotly_chart(fig_crime_by_hour(crime), use_container_width=True)
         st.caption("📌 Evening hours (6pm–midnight) are consistently the most dangerous window across all years.")
 
-    st.info("💡 **Insight:** Crime is not random — it has a clear time signature. Evening hours + summer months = peak risk window. Decay zones amplify this.")
+    # st.info("💡 **Insight:** Crime is not random — it has a clear time signature. Evening hours + summer months = peak risk window. Decay zones amplify this.")
